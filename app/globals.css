@@ -1,0 +1,170 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-background: #F8FAFC; /* Light slate background */
+  --color-foreground: #0F172A; /* Dark slate text */
+  --color-primary: #7C3AED; /* Purple */
+  --color-secondary: #2563EB; /* Blue */
+  --color-accent: #0891B2; /* Cyan */
+  
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  :root {
+    --background: #F8FAFC;
+    --foreground: #0F172A;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+  }
+}
+
+@layer utilities {
+  .glass-card {
+    @apply bg-white/60 backdrop-blur-xl border border-slate-200/50 shadow-[0_8px_32px_0_rgba(0,0,0,0.05)];
+  }
+  
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-purple-600 via-blue-600 to-cyan-600;
+  }
+  
+  .bg-gradient-glow {
+    @apply bg-gradient-to-r from-purple-500/20 via-blue-500/20 to-cyan-500/20 blur-3xl;
+  }
+
+  /* Custom CTA Button */
+  .verd-cta-btn {
+    --color-copper: #C17F59;
+    --color-copper-light: #D4A07A;
+    --color-gold: #C9A96E;
+    --color-bg: #FFFFFF;
+    --color-text: #0F172A;
+    --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 2rem;
+    font-family: var(--font-sans);
+    font-size: 1.125rem;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    border-radius: 100px;
+    color: var(--color-text);
+    text-decoration: none;
+    overflow: hidden;
+    transition: color 0.6s var(--ease-out-expo),
+      box-shadow 0.6s,
+      letter-spacing 0.6s var(--ease-out-expo),
+      transform 0.6s var(--ease-out-expo);
+    cursor: pointer;
+    border: none;
+  }
+
+  .verd-cta-btn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 300%;
+    aspect-ratio: 1;
+    transform-origin: center;
+    background: conic-gradient(rgba(212, 160, 122, 0.7),
+        rgba(193, 127, 89, 0.25) 25%,
+        rgba(201, 169, 110, 0.6) 50%,
+        rgba(193, 127, 89, 0.25) 75%,
+        rgba(212, 160, 122, 0.7));
+    animation: verdBorderSpin 4s linear infinite;
+    z-index: -2;
+    transform: translate(-50%, -50%);
+  }
+
+  @keyframes verdBorderSpin {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+
+  .verd-cta-btn::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 100px;
+    background: var(--color-bg);
+    z-index: -1;
+    transition: background 0.6s;
+  }
+
+  .verd-cta-shimmer {
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 40%;
+    height: 200%;
+    background: radial-gradient(ellipse at center, rgba(232, 184, 148, 0.35), transparent 70%);
+    animation: verdShimmer 3.5s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  @keyframes verdShimmer {
+    0% { left: -50%; opacity: 0; }
+    15% { opacity: 1; }
+    50% { left: 120%; opacity: 1; }
+    65% { opacity: 0; }
+    100% { left: 120%; opacity: 0; }
+  }
+
+  .verd-cta-btn:hover {
+    color: #000000;
+    box-shadow: 0 0 25px rgba(193, 127, 89, 0.25), 0 0 60px rgba(193, 127, 89, 0.1);
+    letter-spacing: 0.08em;
+    transform: translateY(-2px);
+  }
+
+  .verd-cta-btn:hover::before {
+    animation-duration: 2s;
+  }
+
+  .verd-cta-btn:hover::after {
+    background: #F8FAFC;
+  }
+
+  .verd-cta-btn:hover .verd-cta-shimmer {
+    animation-duration: 1.8s;
+  }
+
+  .verd-cta-text {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+}
+
+/* Lenis recommended styles */
+html.lenis, html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
+}
