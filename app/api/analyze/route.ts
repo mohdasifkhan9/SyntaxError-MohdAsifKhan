@@ -57,8 +57,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'No text could be extracted from the document' }, { status: 400 });
     }
 
-    // Call Gemini API
-    const analysis = await analyzeDocument(text);
+    // Call Gemini API (resilient: retries + fallback JSON)
+    const aiResult = await analyzeDocument(text);
+    const analysis = aiResult.analysis;
+    const aiMeta = aiResult.meta;
+    const dbRiskScore =
+      analysis.risk_score === 'Low' || analysis.risk_score === 'Medium' || analysis.risk_score === 'High'
+        ? analysis.risk_score
+        : null;
 
     // Save results into Supabase "documents" table (including new fields)
     const { data: docRecord, error: docError } = await supabase
@@ -68,7 +74,7 @@ export async function POST(req: NextRequest) {
         file_url: pathOrUrl,
         extracted_text: text,
         summary: analysis.summary,
-        risk_score: analysis.risk_score,
+        risk_score: dbRiskScore,
         advice: analysis.advice || null,
         key_points: analysis.key_points || null,
       })
@@ -77,7 +83,27 @@ export async function POST(req: NextRequest) {
 
     if (docError || !docRecord) {
         console.error("Doc Insert Error:", docError);
-        return NextResponse.json({ error: 'Failed to save document record' }, { status: 500 });
+        return NextResponse.json(
+          {
+            success: true,
+            documentId: null,
+            analysis: aiMeta.usedFallback
+              ? analysis
+              : {
+                  summary: 'Unable to save analysis result right now. Please try again.',
+                  key_points: [],
+                  risk_score: 'Unknown',
+                  clauses: [],
+                  advice: 'Please retry after some time.',
+                },
+            meta: {
+              ...aiMeta,
+              usedFallback: true,
+              reason: docError?.message || 'Failed to save document record',
+            },
+          },
+          { status: 200 }
+        );
     }
 
     // Save clauses
@@ -103,11 +129,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
         success: true,
         documentId: docRecord.id,
-        analysis
+        analysis,
+        meta: aiMeta,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Analyze API Error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      {
+        success: true,
+        documentId: null,
+        analysis: {
+          summary: 'Unable to analyze document at the moment. Please try again.',
+          key_points: [],
+          risk_score: 'Unknown',
+          clauses: [],
+          advice: 'Please retry after some time.',
+        },
+        meta: {
+          attempts: 0,
+          retried: false,
+          usedFallback: true,
+          model: 'gemini-2.5-flash',
+          reason: error?.message || 'Internal server error',
+        },
+      },
+      { status: 200 }
+    );
   }
 }

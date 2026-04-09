@@ -67,6 +67,8 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
   const handleUploadAndAnalyze = async () => {
     if (!file) return;
 
+    let retryHintTimer: ReturnType<typeof setTimeout> | null = null;
+
     try {
       setLoading(true);
       setError(null);
@@ -91,17 +93,41 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
       }
 
       // 2. Call our API Route to Extract Text + Analyze with Gemini
-      setProgressText('Analyzing legal document with AI...');
+      setProgressText('Analyzing document...');
+      retryHintTimer = setTimeout(() => {
+        setProgressText('Retrying AI request...');
+      }, 11000);
+
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ documentPath: uploadData.path }),
       });
+      if (retryHintTimer) {
+        clearTimeout(retryHintTimer);
+        retryHintTimer = null;
+      }
 
-      const result = await response.json();
+      const responseClone = response.clone();
+      let result: any = null;
+      try {
+        result = await response.json();
+      } catch {
+        result = null;
+      }
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Failed to analyze document.');
+      if (!response.ok || !result?.success) {
+        const fallbackText = !result ? await responseClone.text().catch(() => '') : '';
+        throw new Error(result?.error || fallbackText || 'Failed to analyze document.');
+      }
+
+      if (result?.meta?.retried) {
+        setProgressText('Retrying AI request...');
+      }
+
+      if (result?.meta?.usedFallback || !result?.documentId) {
+        setError(result?.analysis?.summary || 'Unable to analyze document at the moment. Please try again.');
+        return;
       }
 
       // Done
@@ -115,6 +141,9 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
       console.error(err);
       setError(err.message || 'An unexpected error occurred.');
     } finally {
+      if (retryHintTimer) {
+        clearTimeout(retryHintTimer);
+      }
       setLoading(false);
       setProgressText('');
     }
