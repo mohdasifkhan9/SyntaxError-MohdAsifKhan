@@ -109,16 +109,23 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
       }
 
       const responseClone = response.clone();
+      const contentType = response.headers.get('content-type') || '';
+      const isJsonResponse = contentType.includes('application/json');
       let result: any = null;
-      try {
-        result = await response.json();
-      } catch {
-        result = null;
+      if (isJsonResponse) {
+        try {
+          result = await response.json();
+        } catch {
+          result = null;
+        }
       }
 
       if (!response.ok || !result?.success) {
         const fallbackText = !result ? await responseClone.text().catch(() => '') : '';
-        throw new Error(result?.error || fallbackText || 'Failed to analyze document.');
+        const fallbackMessage = fallbackText.includes('<!DOCTYPE html')
+          ? `Server returned ${response.status} ${response.statusText || 'error'}. Please try again.`
+          : fallbackText;
+        throw new Error(result?.error || fallbackMessage || 'Failed to analyze document.');
       }
 
       if (result?.meta?.retried) {

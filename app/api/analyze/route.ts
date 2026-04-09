@@ -3,6 +3,9 @@ import { createClient } from '@/lib/supabase/server';
 import { analyzeDocument } from '@/lib/gemini';
 import { extractTextFromBuffer } from '@/lib/extractText';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function POST(req: NextRequest) {
   try {
     const supabase = await createClient();
@@ -13,7 +16,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { fileUrl, documentPath } = await req.json();
+    let body: any = {};
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
+
+    const { fileUrl, documentPath } = body;
 
     if (!fileUrl && !documentPath) {
       return NextResponse.json({ error: 'Missing fileUrl or documentPath' }, { status: 400 });
