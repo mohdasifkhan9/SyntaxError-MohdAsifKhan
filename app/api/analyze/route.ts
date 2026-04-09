@@ -47,46 +47,55 @@ export async function POST(req: NextRequest) {
       return jsonError('Request body is required', 400);
     }
 
-    const { fileUrl, documentPath } = body;
+    const { fileUrl, documentPath, text: rawText } = body;
+    const hasValidText = typeof rawText === 'string' && rawText.trim().length > 0;
 
     const hasValidPath = typeof documentPath === 'string' && documentPath.trim().length > 0;
     const hasValidUrl = typeof fileUrl === 'string' && fileUrl.trim().length > 0;
-    if (!hasValidPath && !hasValidUrl) {
-      return jsonError('Missing fileUrl or documentPath', 400);
+    if (!hasValidText && !hasValidPath && !hasValidUrl) {
+      return jsonError('Missing text, fileUrl, or documentPath', 400);
     }
 
-    let pdfBuffer: Buffer;
-
-    // Fetch the file contents. If it's in Supabase storage, we download it using the client.
-    if (hasValidPath) {
-        const { data, error } = await supabase.storage
-            .from('documents')
-            .download(documentPath.trim());
-            
-        if (error || !data) {
-            console.error("Storage Error:", error);
-            return jsonError('Failed to download document from storage', 500);
-        }
-        pdfBuffer = Buffer.from(await data.arrayBuffer());
-    } else {
-        // Fallback for direct URL
-        const fileResponse = await fetch(fileUrl.trim());
-        if (!fileResponse.ok) {
-            return jsonError('Failed to fetch document', 500);
-        }
-        const arrayBuffer = await fileResponse.arrayBuffer();
-        pdfBuffer = Buffer.from(arrayBuffer);
-    }
-
-    // Extract text from the buffer using our new utility
-    const pathOrUrl = hasValidPath ? documentPath.trim() : fileUrl.trim();
     let text = '';
-    
-    try {
-       text = await extractTextFromBuffer(pdfBuffer, pathOrUrl);
-    } catch (parseErr: any) {
-       console.error("Text Extraction Error:", parseErr);
-       return jsonError(parseErr.message || 'Failed to extract text from the document format', 400);
+    const sourceRef = hasValidText
+      ? `manual-input-${Date.now()}.txt`
+      : hasValidPath
+        ? documentPath.trim()
+        : fileUrl.trim();
+
+    if (hasValidText) {
+      text = rawText.trim();
+    } else {
+      let pdfBuffer: Buffer;
+
+      // Fetch the file contents. If it's in Supabase storage, we download it using the client.
+      if (hasValidPath) {
+          const { data, error } = await supabase.storage
+              .from('documents')
+              .download(documentPath.trim());
+              
+          if (error || !data) {
+              console.error("Storage Error:", error);
+              return jsonError('Failed to download document from storage', 500);
+          }
+          pdfBuffer = Buffer.from(await data.arrayBuffer());
+      } else {
+          // Fallback for direct URL
+          const fileResponse = await fetch(fileUrl.trim());
+          if (!fileResponse.ok) {
+              return jsonError('Failed to fetch document', 500);
+          }
+          const arrayBuffer = await fileResponse.arrayBuffer();
+          pdfBuffer = Buffer.from(arrayBuffer);
+      }
+
+      // Extract text from the buffer using our new utility
+      try {
+        text = await extractTextFromBuffer(pdfBuffer, sourceRef);
+      } catch (parseErr: any) {
+        console.error("Text Extraction Error:", parseErr);
+        return jsonError(parseErr.message || 'Failed to extract text from the document format', 400);
+      }
     }
 
     if (!text || text.trim() === '') {
@@ -108,7 +117,7 @@ export async function POST(req: NextRequest) {
       .from('documents')
       .insert({
         user_id: user.id,
-        file_url: pathOrUrl,
+        file_url: sourceRef,
         extracted_text: text,
         summary: analysis.summary,
         risk_score: dbRiskScore,

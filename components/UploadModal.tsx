@@ -40,6 +40,8 @@ const demoData = {
 export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [inputText, setInputText] = useState('');
+  const [isDemo, setIsDemo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string>('');
@@ -71,18 +73,19 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
   };
 
   const handleFileSelection = (selectedFile: File) => {
+    setIsDemo(false);
     setError(null);
     const validTypes = [
-      'application/pdf', 
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
-      'application/msword', 
-      'text/plain'
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'text/plain',
     ];
     if (!validTypes.includes(selectedFile.type)) {
       setError('Only PDF, DOCX, and TXT files are supported currently.');
       return;
     }
-    if (selectedFile.size > 10 * 1024 * 1024) { // 10MB limit
+    if (selectedFile.size > 10 * 1024 * 1024) {
       setError('File size must be less than 10MB.');
       return;
     }
@@ -96,7 +99,9 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
   };
 
   const createDemoAnalysis = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     if (!session) {
       throw new Error('You must be logged in to use the demo document.');
     }
@@ -126,9 +131,7 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
       risk: demoData.risk_score,
     }));
 
-    const { error: clauseError } = await supabase
-      .from('clauses')
-      .insert(clausesToInsert);
+    const { error: clauseError } = await supabase.from('clauses').insert(clausesToInsert);
 
     if (clauseError) {
       throw new Error(clauseError.message || 'Failed to create demo clause data.');
@@ -139,6 +142,7 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
 
   const handleDemo = async () => {
     try {
+      setIsDemo(true);
       setLoading(true);
       setError(null);
       setProgressText('Loading demo document...');
@@ -156,34 +160,48 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
   };
 
   const handleUploadAndAnalyze = async () => {
-    if (!file) return;
+    const trimmedText = inputText.trim();
+    if (!file && !trimmedText) {
+      setError('Please upload a document or paste legal text.');
+      return;
+    }
 
     let retryHintTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
+      setIsDemo(false);
       setLoading(true);
       setError(null);
-      
-      const { data: { session } } = await supabase.auth.getSession();
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (!session) {
-        throw new Error("You must be logged in to upload documents.");
+        throw new Error('You must be logged in to upload documents.');
       }
 
-      // 1. Upload to Supabase Storage
-      setProgressText('Uploading document securely...');
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
-      const filePath = `${session.user.id}/${fileName}`;
+      let payload: Record<string, string> = {};
 
-      const { error: uploadError, data: uploadData } = await supabase.storage
-        .from('documents')
-        .upload(filePath, file);
+      // Prioritize pasted text when both text and file are present.
+      if (trimmedText) {
+        payload = { text: trimmedText };
+      } else if (file) {
+        setProgressText('Uploading document securely...');
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+        const filePath = `${session.user.id}/${fileName}`;
 
-      if (uploadError) {
-        throw new Error(uploadError.message || 'Failed to upload file.');
+        const { error: uploadError, data: uploadData } = await supabase.storage
+          .from('documents')
+          .upload(filePath, file);
+
+        if (uploadError) {
+          throw new Error(uploadError.message || 'Failed to upload file.');
+        }
+
+        payload = { documentPath: uploadData.path };
       }
 
-      // 2. Call our API Route to Extract Text + Analyze with Gemini
       setProgressText('Analyzing document...');
       retryHintTimer = setTimeout(() => {
         setProgressText('Retrying AI request...');
@@ -194,7 +212,7 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
         const response = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ documentPath: uploadData.path }),
+          body: JSON.stringify(payload),
         });
 
         const rawResponse = await response.text();
@@ -206,22 +224,16 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
         }
 
         if (!response.ok || !result?.success) {
-          const fallbackMessage = rawResponse.includes('<!DOCTYPE html')
-            ? `Server returned ${response.status} ${response.statusText || 'error'}.`
-            : rawResponse || 'Failed to analyze document.';
-          throw new Error(result?.error || fallbackMessage);
+          console.error('Analyze API failed', {
+            status: response.status,
+            statusText: response.statusText,
+            body: rawResponse,
+          });
+          throw new Error('AI analysis failed. Please try again.');
         }
       } catch (apiError) {
-        console.error('Analyze API failed. Falling back to demo data.', apiError);
-        if (retryHintTimer) {
-          clearTimeout(retryHintTimer);
-          retryHintTimer = null;
-        }
-        setProgressText('Loading demo document...');
-        const demoDocumentId = await createDemoAnalysis();
-        router.push(`/dashboard/document/${demoDocumentId}`);
-        onClose();
-        return;
+        console.error('Analyze request failed:', apiError);
+        throw new Error('AI analysis failed. Please try again.');
       }
       if (retryHintTimer) {
         clearTimeout(retryHintTimer);
@@ -233,17 +245,13 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
       }
 
       if (result?.meta?.usedFallback || !result?.documentId) {
-        setError(result?.analysis?.summary || 'Unable to analyze document at the moment. Please try again.');
+        setError('AI analysis failed. Please try again.');
         return;
       }
 
-      // Done
       setProgressText('Analysis complete!');
-      
-      // Redirect to document view using the newly created documentId
       router.push(`/dashboard/document/${result.documentId}`);
       onClose();
-
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'An unexpected error occurred.');
@@ -267,7 +275,7 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
             onClick={onClose}
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
           />
-          
+
           <motion.div
             initial={{ scale: 0.95, opacity: 0, y: 20 }}
             animate={{ scale: 1, opacity: 1, y: 0 }}
@@ -285,7 +293,9 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
             <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-cyan-400 mb-2">
               Analyze Document
             </h2>
-            <p className="text-white/60 mb-6">Upload a legal document to get AI-powered insights, risk analysis, and simplified clauses.</p>
+            <p className="text-white/60 mb-6">
+              Upload a legal document to get AI-powered insights, risk analysis, and simplified clauses.
+            </p>
 
             {!file ? (
               <div
@@ -294,8 +304,8 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
                 className={`relative cursor-pointer overflow-hidden rounded-xl border-2 border-dashed p-10 transition-colors text-center ${
-                  isDragging 
-                    ? 'border-cyan-400 bg-cyan-400/5' 
+                  isDragging
+                    ? 'border-cyan-400 bg-cyan-400/5'
                     : 'border-white/20 bg-white/5 hover:border-purple-400/50 hover:bg-white/10'
                 }`}
               >
@@ -314,22 +324,41 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
               </div>
             ) : (
               <div className="rounded-xl border border-white/10 bg-white/5 p-4 flex items-center justify-between">
-                 <div className="flex items-center gap-4 overflow-hidden">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-purple-500/20 text-purple-400">
-                      <FileText className="h-6 w-6" />
-                    </div>
-                    <div className="grid gap-1 overflow-hidden">
-                      <p className="truncate font-medium text-white">{file.name}</p>
-                      <p className="text-xs text-white/50">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
-                    </div>
-                 </div>
-                 {!loading && (
-                    <button onClick={clearFile} className="p-2 text-white/50 hover:text-red-400 transition-colors">
-                      <X className="w-5 h-5" />
-                    </button>
-                 )}
+                <div className="flex items-center gap-4 overflow-hidden">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-purple-500/20 text-purple-400">
+                    <FileText className="h-6 w-6" />
+                  </div>
+                  <div className="grid gap-1 overflow-hidden">
+                    <p className="truncate font-medium text-white">{file.name}</p>
+                    <p className="text-xs text-white/50">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                  </div>
+                </div>
+                {!loading && (
+                  <button onClick={clearFile} className="p-2 text-white/50 hover:text-red-400 transition-colors">
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
               </div>
             )}
+
+            <div className="my-4 flex items-center gap-3">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-xs font-medium text-white/40">OR</span>
+              <div className="h-px flex-1 bg-white/10" />
+            </div>
+
+            <textarea
+              value={inputText}
+              onChange={(e) => {
+                setIsDemo(false);
+                setInputText(e.target.value);
+                setError(null);
+              }}
+              disabled={loading}
+              placeholder="Paste your legal document here..."
+              rows={5}
+              className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder:text-white/40 outline-none transition-colors focus:border-cyan-400/40 focus:bg-white/10 disabled:opacity-60"
+            />
 
             <div className="mt-4 text-center">
               <button
@@ -338,15 +367,15 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
                 disabled={loading}
                 className="text-sm text-white/50 hover:text-cyan-300 transition-colors disabled:opacity-50"
               >
-                Try Demo Document →
+                Try Demo Document -&gt;
               </button>
             </div>
 
             {error && (
-               <div className="mt-4 flex items-center gap-2 text-red-400 bg-red-400/10 p-3 rounded-lg text-sm border border-red-400/20">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <p>{error}</p>
-               </div>
+              <div className="mt-4 flex items-center gap-2 text-red-400 bg-red-400/10 p-3 rounded-lg text-sm border border-red-400/20">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <p>{error}</p>
+              </div>
             )}
 
             <div className="mt-6 flex justify-end gap-3">
@@ -358,12 +387,12 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
                 Cancel
               </button>
               <button
-                disabled={!file || loading}
+                disabled={loading || (!file && !inputText.trim())}
                 onClick={handleUploadAndAnalyze}
                 className="relative flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
                 style={{
-                  background: "linear-gradient(135deg, #7C3AED 0%, #2563EB 100%)",
-                  boxShadow: "0 4px 15px rgba(124, 58, 237, 0.3)",
+                  background: 'linear-gradient(135deg, #7C3AED 0%, #2563EB 100%)',
+                  boxShadow: '0 4px 15px rgba(124, 58, 237, 0.3)',
                 }}
               >
                 {loading ? (
