@@ -205,19 +205,8 @@ GEMINI_API_KEY=your_api_key
 
 ---
 
-## 👨‍💻 Author
+## 👨‍💻 Team
 
-**Asif Khan**
+**SyntaxError**
 
-* 💼 GitHub: https://github.com/your-username
-* 🌐 Portfolio: (Add your link)
 
----
-
-## ⭐ Support
-
-If you like this project, give it a ⭐ on GitHub!
-
----
-
-> “We didn’t just analyze legal documents — we made them understandable, interactive, and actionable.”
