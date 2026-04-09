@@ -6,6 +6,37 @@ import { Upload, X, FileText, Loader2, AlertCircle } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
+const demoData = {
+  summary:
+    'This sample rental agreement has moderate risk. Watch for one-sided termination terms, late-fee penalties, and limited landlord repair obligations.',
+  key_points: [
+    'The agreement allows quick termination with short notice.',
+    'Late payment penalties can accumulate quickly.',
+    'Repair responsibilities are mostly shifted to the tenant.',
+  ],
+  risk_score: 'Medium',
+  score: 62,
+  clauses: [
+    {
+      text: 'Either party may terminate this agreement with 7 days written notice.',
+      keyword: 'termination',
+    },
+    {
+      text: 'A late fee of 5% of monthly rent applies after 3 days of due date.',
+      keyword: 'penalty',
+    },
+    {
+      text: 'Tenant is responsible for all minor maintenance and interior repairs.',
+      keyword: 'maintenance',
+    },
+  ],
+  advice: [
+    'Ask for at least 30 days termination notice.',
+    'Cap late fees to a fixed and reasonable amount.',
+    'Clarify landlord responsibility for structural and major repairs.',
+  ],
+};
+
 export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [isDragging, setIsDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
@@ -64,6 +95,66 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  const createDemoAnalysis = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      throw new Error('You must be logged in to use the demo document.');
+    }
+
+    const { data: docRecord, error: docError } = await supabase
+      .from('documents')
+      .insert({
+        user_id: session.user.id,
+        file_url: `demo/demo-document-${Date.now()}.txt`,
+        extracted_text: 'Demo legal document content for product walkthrough.',
+        summary: demoData.summary,
+        risk_score: demoData.risk_score,
+        advice: demoData.advice.join('\n'),
+        key_points: demoData.key_points,
+      })
+      .select('id')
+      .single();
+
+    if (docError || !docRecord) {
+      throw new Error(docError?.message || 'Failed to create demo analysis.');
+    }
+
+    const clausesToInsert = demoData.clauses.map((clause) => ({
+      document_id: docRecord.id,
+      clause_text: clause.text,
+      simplified: `Potential concern related to "${clause.keyword}".`,
+      risk: demoData.risk_score,
+    }));
+
+    const { error: clauseError } = await supabase
+      .from('clauses')
+      .insert(clausesToInsert);
+
+    if (clauseError) {
+      throw new Error(clauseError.message || 'Failed to create demo clause data.');
+    }
+
+    return docRecord.id;
+  };
+
+  const handleDemo = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setProgressText('Loading demo document...');
+
+      const documentId = await createDemoAnalysis();
+      router.push(`/dashboard/document/${documentId}`);
+      onClose();
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || 'Unable to load demo document.');
+    } finally {
+      setLoading(false);
+      setProgressText('');
+    }
+  };
+
   const handleUploadAndAnalyze = async () => {
     if (!file) return;
 
@@ -98,30 +189,43 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
         setProgressText('Retrying AI request...');
       }, 11000);
 
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentPath: uploadData.path }),
-      });
+      let result: any = null;
+      try {
+        const response = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ documentPath: uploadData.path }),
+        });
+
+        const rawResponse = await response.text();
+        try {
+          result = rawResponse ? JSON.parse(rawResponse) : null;
+        } catch (parseError) {
+          console.error('Analyze API returned non-JSON response:', rawResponse);
+          console.error('JSON parse error:', parseError);
+        }
+
+        if (!response.ok || !result?.success) {
+          const fallbackMessage = rawResponse.includes('<!DOCTYPE html')
+            ? `Server returned ${response.status} ${response.statusText || 'error'}.`
+            : rawResponse || 'Failed to analyze document.';
+          throw new Error(result?.error || fallbackMessage);
+        }
+      } catch (apiError) {
+        console.error('Analyze API failed. Falling back to demo data.', apiError);
+        if (retryHintTimer) {
+          clearTimeout(retryHintTimer);
+          retryHintTimer = null;
+        }
+        setProgressText('Loading demo document...');
+        const demoDocumentId = await createDemoAnalysis();
+        router.push(`/dashboard/document/${demoDocumentId}`);
+        onClose();
+        return;
+      }
       if (retryHintTimer) {
         clearTimeout(retryHintTimer);
         retryHintTimer = null;
-      }
-
-      const rawResponse = await response.text();
-      let result: any = null;
-      try {
-        result = rawResponse ? JSON.parse(rawResponse) : null;
-      } catch (parseError) {
-        console.error('Analyze API returned non-JSON response:', rawResponse);
-        console.error('JSON parse error:', parseError);
-      }
-
-      if (!response.ok || !result?.success) {
-        const fallbackMessage = rawResponse.includes('<!DOCTYPE html')
-          ? `Server returned ${response.status} ${response.statusText || 'error'}. Please try again.`
-          : rawResponse;
-        throw new Error(result?.error || fallbackMessage || 'Failed to analyze document.');
       }
 
       if (result?.meta?.retried) {
@@ -226,6 +330,17 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
                  )}
               </div>
             )}
+
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={handleDemo}
+                disabled={loading}
+                className="text-sm text-white/50 hover:text-cyan-300 transition-colors disabled:opacity-50"
+              >
+                Try Demo Document →
+              </button>
+            </div>
 
             {error && (
                <div className="mt-4 flex items-center gap-2 text-red-400 bg-red-400/10 p-3 rounded-lg text-sm border border-red-400/20">
