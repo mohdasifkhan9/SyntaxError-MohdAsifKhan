@@ -108,23 +108,19 @@ export default function UploadModal({ isOpen, onClose }: { isOpen: boolean; onCl
         retryHintTimer = null;
       }
 
-      const responseClone = response.clone();
-      const contentType = response.headers.get('content-type') || '';
-      const isJsonResponse = contentType.includes('application/json');
+      const rawResponse = await response.text();
       let result: any = null;
-      if (isJsonResponse) {
-        try {
-          result = await response.json();
-        } catch {
-          result = null;
-        }
+      try {
+        result = rawResponse ? JSON.parse(rawResponse) : null;
+      } catch (parseError) {
+        console.error('Analyze API returned non-JSON response:', rawResponse);
+        console.error('JSON parse error:', parseError);
       }
 
       if (!response.ok || !result?.success) {
-        const fallbackText = !result ? await responseClone.text().catch(() => '') : '';
-        const fallbackMessage = fallbackText.includes('<!DOCTYPE html')
+        const fallbackMessage = rawResponse.includes('<!DOCTYPE html')
           ? `Server returned ${response.status} ${response.statusText || 'error'}. Please try again.`
-          : fallbackText;
+          : rawResponse;
         throw new Error(result?.error || fallbackMessage || 'Failed to analyze document.');
       }
 

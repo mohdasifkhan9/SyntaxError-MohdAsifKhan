@@ -6,71 +6,98 @@ import { extractTextFromBuffer } from '@/lib/extractText';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const FALLBACK_ANALYSIS = {
+  summary: 'Analysis temporarily unavailable',
+  key_points: [],
+  risk_score: 'Unknown',
+  clauses: [],
+  advice: 'Please try again later',
+};
+
+function jsonError(message: string, status: number, details?: Record<string, unknown>) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: message,
+      ...details,
+    },
+    { status }
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
+    console.info('[analyze] Request started');
     const supabase = await createClient();
     
     // Auth check using getUser for security
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return jsonError('Unauthorized', 401);
     }
 
     let body: any = {};
     try {
       body = await req.json();
     } catch {
-      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+      return jsonError('Invalid JSON body', 400);
+    }
+
+    if (!body || typeof body !== 'object') {
+      return jsonError('Request body is required', 400);
     }
 
     const { fileUrl, documentPath } = body;
 
-    if (!fileUrl && !documentPath) {
-      return NextResponse.json({ error: 'Missing fileUrl or documentPath' }, { status: 400 });
+    const hasValidPath = typeof documentPath === 'string' && documentPath.trim().length > 0;
+    const hasValidUrl = typeof fileUrl === 'string' && fileUrl.trim().length > 0;
+    if (!hasValidPath && !hasValidUrl) {
+      return jsonError('Missing fileUrl or documentPath', 400);
     }
 
     let pdfBuffer: Buffer;
 
     // Fetch the file contents. If it's in Supabase storage, we download it using the client.
-    if (documentPath) {
+    if (hasValidPath) {
         const { data, error } = await supabase.storage
             .from('documents')
-            .download(documentPath);
+            .download(documentPath.trim());
             
         if (error || !data) {
             console.error("Storage Error:", error);
-            return NextResponse.json({ error: 'Failed to download document from storage' }, { status: 500 });
+            return jsonError('Failed to download document from storage', 500);
         }
         pdfBuffer = Buffer.from(await data.arrayBuffer());
     } else {
         // Fallback for direct URL
-        const fileResponse = await fetch(fileUrl);
+        const fileResponse = await fetch(fileUrl.trim());
         if (!fileResponse.ok) {
-            return NextResponse.json({ error: 'Failed to fetch document' }, { status: 500 });
+            return jsonError('Failed to fetch document', 500);
         }
         const arrayBuffer = await fileResponse.arrayBuffer();
         pdfBuffer = Buffer.from(arrayBuffer);
     }
 
     // Extract text from the buffer using our new utility
-    const pathOrUrl = documentPath || fileUrl;
+    const pathOrUrl = hasValidPath ? documentPath.trim() : fileUrl.trim();
     let text = '';
     
     try {
        text = await extractTextFromBuffer(pdfBuffer, pathOrUrl);
     } catch (parseErr: any) {
        console.error("Text Extraction Error:", parseErr);
-       return NextResponse.json({ error: parseErr.message || 'Failed to extract text from the document format' }, { status: 400 });
+       return jsonError(parseErr.message || 'Failed to extract text from the document format', 400);
     }
 
     if (!text || text.trim() === '') {
-        return NextResponse.json({ error: 'No text could be extracted from the document' }, { status: 400 });
+        return jsonError('No text could be extracted from the document', 400);
     }
 
     // Call Gemini API (resilient: retries + fallback JSON)
     const aiResult = await analyzeDocument(text);
     const analysis = aiResult.analysis;
     const aiMeta = aiResult.meta;
+    console.info('[analyze] Gemini completed', aiMeta);
     const dbRiskScore =
       analysis.risk_score === 'Low' || analysis.risk_score === 'Medium' || analysis.risk_score === 'High'
         ? analysis.risk_score
@@ -95,17 +122,12 @@ export async function POST(req: NextRequest) {
         console.error("Doc Insert Error:", docError);
         return NextResponse.json(
           {
-            success: true,
+            success: false,
+            error: docError?.message || 'Failed to save document record',
             documentId: null,
             analysis: aiMeta.usedFallback
               ? analysis
-              : {
-                  summary: 'Unable to save analysis result right now. Please try again.',
-                  key_points: [],
-                  risk_score: 'Unknown',
-                  clauses: [],
-                  advice: 'Please retry after some time.',
-                },
+              : FALLBACK_ANALYSIS,
             meta: {
               ...aiMeta,
               usedFallback: true,
@@ -147,15 +169,10 @@ export async function POST(req: NextRequest) {
     console.error('Analyze API Error:', error);
     return NextResponse.json(
       {
-        success: true,
+        success: false,
+        error: error?.message || 'Something went wrong',
         documentId: null,
-        analysis: {
-          summary: 'Unable to analyze document at the moment. Please try again.',
-          key_points: [],
-          risk_score: 'Unknown',
-          clauses: [],
-          advice: 'Please retry after some time.',
-        },
+        analysis: FALLBACK_ANALYSIS,
         meta: {
           attempts: 0,
           retried: false,

@@ -161,8 +161,10 @@ async function requestAnalysis(modelName: string, prompt: string, apiKey: string
 }
 
 export async function analyzeDocument(text: string): Promise<AnalyzeDocumentResult> {
+  console.info('[gemini] analyzeDocument started');
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
+    console.error('[gemini] GEMINI_API_KEY missing');
     return {
       analysis: FALLBACK_ANALYSIS,
       meta: {
@@ -183,8 +185,10 @@ export async function analyzeDocument(text: string): Promise<AnalyzeDocumentResu
   for (const modelName of modelsToTry) {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       attempts += 1;
+      console.info('[gemini] request attempt', { model: modelName, attempt, totalAttempts: attempts });
       try {
         const analysis = await requestAnalysis(modelName, prompt, apiKey);
+        console.info('[gemini] request success', { model: modelName, totalAttempts: attempts });
         return {
           analysis,
           meta: {
@@ -197,6 +201,7 @@ export async function analyzeDocument(text: string): Promise<AnalyzeDocumentResu
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
         lastErrorMessage = message;
+        console.error('[gemini] request failed', { model: modelName, attempt, message });
 
         const canRetry = shouldRetry(error);
         const isLastAttempt = attempt === MAX_RETRIES;
@@ -211,6 +216,7 @@ export async function analyzeDocument(text: string): Promise<AnalyzeDocumentResu
     }
   }
 
+  console.error('[gemini] returning fallback response', { attempts, reason: lastErrorMessage });
   return {
     analysis: FALLBACK_ANALYSIS,
     meta: {
